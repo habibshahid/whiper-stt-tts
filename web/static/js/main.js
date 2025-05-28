@@ -21,8 +21,10 @@ document.addEventListener('DOMContentLoaded', function() {
     const recordingStatus = document.getElementById('recordingStatus');
     const recordingProgress = document.getElementById('recordingProgress');
 	const generateGoogleSpeechBtn = document.getElementById('generateGoogleSpeechBtn');
+	const generateXTTSSpeechBtn = document.getElementById('generateXTTSSpeechBtn');
 	const generateWhisperSpeechBtn = document.getElementById('generateWhisperSpeechBtn');
-    const generateClonedSpeechBtn = document.getElementById('generateClonedSpeechBtn');
+	
+	const generateXTTSClonedSpeechBtn = document.getElementById('generateXTTSClonedSpeechBtn');
     const generateStyleTTSClonedSpeechBtn = document.getElementById('generateStyleTTSClonedSpeechBtn');
 	const generateWhisperClonedSpeechBtn = document.getElementById('generateWhisperClonedSpeechBtn');
 	
@@ -32,7 +34,21 @@ document.addEventListener('DOMContentLoaded', function() {
     let recordingInterval;
     let recordingSeconds = 0;
     let maxRecordingTime = 300; // 5 minutes max
-
+	
+	const speedControl = document.getElementById('ttsSpeedControl');
+    const speedValue = document.getElementById('speedValue');
+	
+	if (speedControl && speedValue) {
+        speedControl.addEventListener('input', function() {
+            speedValue.textContent = speedControl.value;
+        });
+    }
+    
+    // Add event listener for the main generate button
+    const generateSpeechBtn = document.getElementById('generateSpeechBtn');
+    if (generateSpeechBtn) {
+        generateSpeechBtn.addEventListener('click', generateSpeech);
+    }
     // Fetch available models and system info
     fetchModels();
 
@@ -41,14 +57,18 @@ document.addEventListener('DOMContentLoaded', function() {
     transcribeBtn.addEventListener('click', transcribeAudio);
     recordBtn.addEventListener('click', startRecording);
     stopBtn.addEventListener('click', stopRecording);
+	
 	if (generateGoogleSpeechBtn) {
         generateGoogleSpeechBtn.addEventListener('click', generateGoogleSpeech);
+    }
+	if (generateXTTSSpeechBtn) {
+        generateXTTSSpeechBtn.addEventListener('click', generateXTTSSpeech);
     }
 	if (generateWhisperSpeechBtn) {
         generateWhisperSpeechBtn.addEventListener('click', generateWhisperSpeech);
     }
-	if (generateClonedSpeechBtn) {
-        generateClonedSpeechBtn.addEventListener('click', generateClonedSpeech);
+	if (generateXTTSClonedSpeechBtn) {
+        generateXTTSClonedSpeechBtn.addEventListener('click', generateXTTSClonedSpeech);
     }
 	if (generateStyleTTSClonedSpeechBtn) {
         generateStyleTTSClonedSpeechBtn.addEventListener('click', generateStyleTTSClonedSpeech);
@@ -393,7 +413,87 @@ document.addEventListener('DOMContentLoaded', function() {
 		}
 	}
 	
-	async function generateClonedSpeech() {
+	async function generateXTTSSpeech() {
+		const textArea = document.getElementById('textToSpeech');
+		const languageSelect = document.getElementById('ttsLanguageSelect');
+		const audioPlayer = document.getElementById('ttsAudioPlayer');
+		
+		if (!textArea || !languageSelect || !audioPlayer) {
+			console.error('Required elements not found');
+			return;
+		}
+		
+		const text = textArea.value.trim();
+		if (!text) {
+			alert('Please enter some text to convert to speech');
+			return;
+		}
+		
+		const language = languageSelect.value;
+		
+		try {
+			// Show loading state
+			const generateXTTSSpeechBtn = document.getElementById('generateXTTSSpeechBtn');
+			if (generateXTTSSpeechBtn) {
+				generateXTTSSpeechBtn.disabled = true;
+				generateXTTSSpeechBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Generating...';
+			}
+			
+			console.log('Sending XTTS request:', { text, language });
+			
+			// Send request to the server
+			const response = await fetch('/whisper-stt/api/xtts/tts', {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					'Accept': 'audio/wav'
+				},
+				body: JSON.stringify({
+					text: text,
+					language: language
+				})
+			});
+			
+			// Reset button state
+			if (generateXTTSSpeechBtn) {
+				generateXTTSSpeechBtn.disabled = false;
+				generateXTTSSpeechBtn.textContent = 'Generate XTTS Speech';
+			}
+			
+			console.log('XTTS response status:', response.status);
+			console.log('XTTS response headers:', response.headers);
+			
+			if (!response.ok) {
+				if (response.headers.get('content-type')?.includes('application/json')) {
+					const errorData = await response.json();
+					throw new Error(errorData.error || `HTTP error ${response.status}`);
+				} else {
+					throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
+				}
+			}
+			
+			// Get audio blob and play it
+			const audioBlob = await response.blob();
+			console.log('Received audio blob:', audioBlob);
+			
+			const audioUrl = URL.createObjectURL(audioBlob);
+			audioPlayer.src = audioUrl;
+			audioPlayer.play();
+			
+		} catch (error) {
+			console.error('Error generating XTTS speech:', error);
+			alert('Error generating XTTS speech: ' + error.message);
+			
+			// Reset button state in case of error
+			const generateXTTSSpeechBtn = document.getElementById('generateXTTSSpeechBtn');
+			if (generateXTTSSpeechBtn) {
+				generateXTTSSpeechBtn.disabled = false;
+				generateXTTSSpeechBtn.textContent = 'Generate XTTS Speech';
+			}
+		}
+	}
+	
+	async function generateXTTSClonedSpeech() {
 		const textArea = document.getElementById('cloneText');
 		const voiceFileInput = document.getElementById('voiceFile');
 		const languageSelect = document.getElementById('cloneLanguageSelect');
@@ -420,33 +520,37 @@ document.addEventListener('DOMContentLoaded', function() {
 		
 		try {
 			// Show loading state
-			generateXTTSClonedSpeechBtn.disabled = true;
-			generateXTTSClonedSpeechBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Generating...';
+			const generateXTTSClonedSpeechBtn = document.getElementById('generateXTTSClonedSpeechBtn');
+			if (generateXTTSClonedSpeechBtn) {
+				generateXTTSClonedSpeechBtn.disabled = true;
+				generateXTTSClonedSpeechBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Generating...';
+			}
 			
 			// Create form data
 			const formData = new FormData();
+			formData.append('text', text);
+			formData.append('language', language);
 			formData.append('voice_file', voiceFile);
 			
 			// Send request to the server
 			const response = await fetch('/whisper-stt/api/tts_clone', {
 				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json'
-				},
-				body: JSON.stringify({
-					text: text,
-					language: language
-				}),
-				body: formData
+				body: formData  // Use only this formData object with all params
 			});
 			
 			// Reset button state
-			generateXTTSClonedSpeechBtn.disabled = false;
-			generateXTTSClonedSpeechBtn.textContent = 'Generate XTTS Cloned Speech';
+			if (generateXTTSClonedSpeechBtn) {
+				generateXTTSClonedSpeechBtn.disabled = false;
+				generateXTTSClonedSpeechBtn.textContent = 'Generate XTTS Cloned Speech';
+			}
 			
 			if (!response.ok) {
-				const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-				throw new Error(errorData.error || `HTTP error ${response.status}`);
+				if (response.headers.get('content-type')?.includes('application/json')) {
+					const errorData = await response.json();
+					throw new Error(errorData.error || `HTTP error ${response.status}`);
+				} else {
+					throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
+				}
 			}
 			
 			// Get audio blob and play it
@@ -461,11 +565,15 @@ document.addEventListener('DOMContentLoaded', function() {
 			alert('Error generating cloned speech: ' + error.message);
 			
 			// Reset button state in case of error
-			generateXTTSClonedSpeechBtn.disabled = false;
-			generateXTTSClonedSpeechBtn.textContent = 'Generate XTTS Cloned Speech';
+			const generateXTTSClonedSpeechBtn = document.getElementById('generateXTTSClonedSpeechBtn');
+			if (generateXTTSClonedSpeechBtn) {
+				generateXTTSClonedSpeechBtn.disabled = false;
+				generateXTTSClonedSpeechBtn.textContent = 'Generate XTTS Cloned Speech';
+			}
 		}
 	}
-	
+
+	// Fixed generateStyleTTSClonedSpeech function
 	async function generateStyleTTSClonedSpeech() {
 		const textArea = document.getElementById('cloneText');
 		const voiceFileInput = document.getElementById('voiceFile');
@@ -493,33 +601,37 @@ document.addEventListener('DOMContentLoaded', function() {
 		
 		try {
 			// Show loading state
-			generateStyleTTSClonedSpeechBtn.disabled = true;
-			generateStyleTTSClonedSpeechBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Generating...';
+			const generateStyleTTSClonedSpeechBtn = document.getElementById('generateStyleTTSClonedSpeechBtn');
+			if (generateStyleTTSClonedSpeechBtn) {
+				generateStyleTTSClonedSpeechBtn.disabled = true;
+				generateStyleTTSClonedSpeechBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Generating...';
+			}
 			
 			// Create form data
 			const formData = new FormData();
+			formData.append('text', text);
+			formData.append('language', language);
 			formData.append('voice_file', voiceFile);
 			
 			// Send request to the server
 			const response = await fetch('/whisper-stt/api/styletts/tts_clone', {
 				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json'
-				},
-				body: JSON.stringify({
-					text: text,
-					language: language
-				}),
 				body: formData
 			});
 			
 			// Reset button state
-			generateStyleTTSClonedSpeechBtn.disabled = false;
-			generateStyleTTSClonedSpeechBtn.textContent = 'Generate Style TTS Cloned Speech';
+			if (generateStyleTTSClonedSpeechBtn) {
+				generateStyleTTSClonedSpeechBtn.disabled = false;
+				generateStyleTTSClonedSpeechBtn.textContent = 'Generate StyleTTS Cloned Speech';
+			}
 			
 			if (!response.ok) {
-				const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-				throw new Error(errorData.error || `HTTP error ${response.status}`);
+				if (response.headers.get('content-type')?.includes('application/json')) {
+					const errorData = await response.json();
+					throw new Error(errorData.error || `HTTP error ${response.status}`);
+				} else {
+					throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
+				}
 			}
 			
 			// Get audio blob and play it
@@ -534,11 +646,15 @@ document.addEventListener('DOMContentLoaded', function() {
 			alert('Error generating cloned speech: ' + error.message);
 			
 			// Reset button state in case of error
-			generateStyleTTSClonedSpeechBtn.disabled = false;
-			generateStyleTTSClonedSpeechBtn.textContent = 'Generate Style TTS Cloned Speech';
+			const generateStyleTTSClonedSpeechBtn = document.getElementById('generateStyleTTSClonedSpeechBtn');
+			if (generateStyleTTSClonedSpeechBtn) {
+				generateStyleTTSClonedSpeechBtn.disabled = false;
+				generateStyleTTSClonedSpeechBtn.textContent = 'Generate StyleTTS Cloned Speech';
+			}
 		}
 	}
-	
+
+	// Fixed generateWhisperClonedSpeech function
 	async function generateWhisperClonedSpeech() {
 		const textArea = document.getElementById('cloneText');
 		const voiceFileInput = document.getElementById('voiceFile');
@@ -566,33 +682,37 @@ document.addEventListener('DOMContentLoaded', function() {
 		
 		try {
 			// Show loading state
-			generateWhisperClonedSpeechBtn.disabled = true;
-			generateWhisperClonedSpeechBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Generating...';
+			const generateWhisperClonedSpeechBtn = document.getElementById('generateWhisperClonedSpeechBtn');
+			if (generateWhisperClonedSpeechBtn) {
+				generateWhisperClonedSpeechBtn.disabled = true;
+				generateWhisperClonedSpeechBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Generating...';
+			}
 			
 			// Create form data
 			const formData = new FormData();
+			formData.append('text', text);
+			formData.append('language', language);
 			formData.append('voice_file', voiceFile);
 			
 			// Send request to the server
 			const response = await fetch('/whisper-stt/api/whisper/tts_clone', {
 				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json'
-				},
-				body: JSON.stringify({
-					text: text,
-					language: language
-				}),
 				body: formData
 			});
 			
 			// Reset button state
-			generateWhisperClonedSpeechBtn.disabled = false;
-			generateWhisperClonedSpeechBtn.textContent = 'Generate Whisper Cloned Speech';
+			if (generateWhisperClonedSpeechBtn) {
+				generateWhisperClonedSpeechBtn.disabled = false;
+				generateWhisperClonedSpeechBtn.textContent = 'Generate Whisper Cloned Speech';
+			}
 			
 			if (!response.ok) {
-				const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-				throw new Error(errorData.error || `HTTP error ${response.status}`);
+				if (response.headers.get('content-type')?.includes('application/json')) {
+					const errorData = await response.json();
+					throw new Error(errorData.error || `HTTP error ${response.status}`);
+				} else {
+					throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
+				}
 			}
 			
 			// Get audio blob and play it
@@ -607,8 +727,11 @@ document.addEventListener('DOMContentLoaded', function() {
 			alert('Error generating cloned speech: ' + error.message);
 			
 			// Reset button state in case of error
-			generateWhisperClonedSpeechBtn.disabled = false;
-			generateWhisperClonedSpeechBtn.textContent = 'Generate Whisper Cloned Speech';
+			const generateWhisperClonedSpeechBtn = document.getElementById('generateWhisperClonedSpeechBtn');
+			if (generateWhisperClonedSpeechBtn) {
+				generateWhisperClonedSpeechBtn.disabled = false;
+				generateWhisperClonedSpeechBtn.textContent = 'Generate Whisper Cloned Speech';
+			}
 		}
 	}
 });
