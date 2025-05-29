@@ -9,12 +9,45 @@ import uuid
 import sys
 import logging
 import traceback 
+from pyannote.audio import Pipeline
+import librosa
+from pydub import AudioSegment
+import base64
+
+os.environ['NNPACK_DISABLE'] = '1'
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, 
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+diarization_pipeline = None
+diarization_available = False
+
+HUGGINGFACE_TOKEN = ""
+
+try:
+    # You'll need to get access to pyannote/speaker-diarization model on HuggingFace
+    # Visit https://huggingface.co/pyannote/speaker-diarization and accept the user agreement
+    # Then get your HF_TOKEN from https://huggingface.co/settings/tokens
+    # Set this as an environment variable: export HF_TOKEN=your_token_here
+    
+    # Uncomment the following line once you have the token
+    hf_token = HUGGINGFACE_TOKEN
+    if hf_token:
+        diarization_pipeline = Pipeline.from_pretrained(
+            "pyannote/speaker-diarization-3.1", 
+            use_auth_token=hf_token
+        )
+        diarization_available = True
+        logger.info("Diarization pipeline loaded successfully")
+    else:
+        logger.warning("HF_TOKEN not found. Diarization will not be available.")
+    
+except Exception as e:
+    logger.error(f"Error loading diarization pipeline: {e}")
+    logger.error(traceback.format_exc())
+        
 # Load WhisperSpeech pipeline
 try:
     from whisperspeech.pipeline import Pipeline
@@ -50,6 +83,7 @@ tts_is_multilingual = False
 try:
     logger.info("Attempting to load TTS library...")
     from TTS.api import TTS
+    
     logger.info("TTS module imported successfully")
     
     # Set the XTTS model name
@@ -204,9 +238,35 @@ def get_models():
         "device": device,
         "tts_available": tts_available,
         "whisper_available": whisper_available,
-        "gtts_available": gtts_available
+        "gtts_available": gtts_available,
+        "diarization_available": diarization_available  # Add this line
     })
 
+def process_diarization(audio_path):
+    """Process audio for speaker diarization"""
+    if not diarization_available or not diarization_pipeline:
+        return {"error": "Diarization is not available"}
+    
+    try:
+        # Run diarization
+        diarization = diarization_pipeline(audio_path)
+        
+        # Extract speaker segments
+        segments = []
+        for turn, _, speaker in diarization.itertracks(yield_label=True):
+            segments.append({
+                "speaker": speaker,
+                "start": round(turn.start, 2),
+                "end": round(turn.end, 2)
+            })
+        
+        return {"segments": segments}
+    
+    except Exception as e:
+        logger.error(f"Diarization failed: {e}")
+        logger.error(traceback.format_exc())
+        return {"error": f"Diarization failed: {str(e)}"}
+        
 @app.route('/api/change_model', methods=['POST'])
 def change_model():
     """Change the current model"""
@@ -260,6 +320,7 @@ def transcribe_audio():
     
     audio_file = request.files['audio']
     language = request.form.get('language', None)
+    enable_diarization = request.form.get('diarize', 'false').lower() == 'true'
     
     # Generate a unique filename
     filename = f"{uuid.uuid4()}{os.path.splitext(audio_file.filename)[1]}"
@@ -288,10 +349,15 @@ def transcribe_audio():
         # Transcribe the audio
         result = transcriber(filepath, **transcribe_kwargs)
         
+        # Process diarization if requested and available
+        diarization_result = None
+        if enable_diarization and diarization_available:
+            diarization_result = process_diarization(filepath)
+        
         process_time = time.time() - start_time
         
         # Return results
-        return jsonify({
+        response_data = {
             "success": True,
             "text": result["text"],
             "chunks": result.get("chunks", []),
@@ -300,12 +366,74 @@ def transcribe_audio():
             "device": device,
             "process_time": f"{process_time:.2f} seconds",
             "file_url": f"/uploads/{filename}"
-        })
+        }
+        
+        if diarization_result and "segments" in diarization_result:
+            response_data["diarization"] = diarization_result["segments"]
+            
+            # If we have both timestamps from Whisper and speaker segments,
+            # we can try to merge them to get a speaker-attributed transcript
+            if "chunks" in result and len(result["chunks"]) > 0:
+                response_data["diarized_text"] = merge_transcription_with_diarization(
+                    result["chunks"], 
+                    diarization_result["segments"]
+                )
+                
+        return jsonify(response_data)
         
     except Exception as e:
         logger.error(f"Transcription failed: {e}")
         return jsonify({"error": f"Transcription failed: {str(e)}"}), 500
 
+def merge_transcription_with_diarization(transcription_chunks, diarization_segments):
+    """Merge Whisper timestamps with speaker segments to create speaker-attributed transcript"""
+    # This is a simple algorithm - in practice, you might want something more sophisticated
+    diarized_text = []
+    
+    for chunk in transcription_chunks:
+        if "timestamp" not in chunk:
+            continue
+            
+        chunk_start = chunk["timestamp"][0]
+        chunk_end = chunk["timestamp"][1]
+        chunk_text = chunk["text"]
+        
+        # Find the speaker who was talking during this chunk
+        # (simple approach - assign to speaker who covers most of the chunk)
+        max_overlap = 0
+        assigned_speaker = None
+        
+        for segment in diarization_segments:
+            seg_start = segment["start"]
+            seg_end = segment["end"]
+            
+            # Calculate overlap
+            overlap_start = max(chunk_start, seg_start)
+            overlap_end = min(chunk_end, seg_end)
+            overlap = max(0, overlap_end - overlap_start)
+            
+            if overlap > max_overlap:
+                max_overlap = overlap
+                assigned_speaker = segment["speaker"]
+        
+        if assigned_speaker:
+            diarized_text.append({
+                "speaker": assigned_speaker,
+                "text": chunk_text,
+                "start": chunk_start,
+                "end": chunk_end
+            })
+        else:
+            # If no speaker found, assign to "Unknown"
+            diarized_text.append({
+                "speaker": "Unknown",
+                "text": chunk_text,
+                "start": chunk_start,
+                "end": chunk_end
+            })
+    
+    return diarized_text
+    
 @app.route('/api/xtts/tts', methods=['POST', 'OPTIONS'])
 def text_to_speech_xtts():
     """Convert text to speech using XTTS without voice cloning"""
@@ -331,7 +459,9 @@ def text_to_speech_xtts():
     
     text = request.json['text']
     language = request.json.get('language', 'en')
-    logger.info(f"XTTS TTS request - Text: '{text[:50]}...', Language: '{language}'")
+    speed = request.json.get('speed', 1.0)  # Added speed parameter with default 1.0
+    
+    logger.info(f"XTTS TTS request - Text: '{text[:50]}...', Language: '{language}', Speed: {speed}")
     
     try:
         # Create temporary file for audio
@@ -404,7 +534,12 @@ def text_to_speech_xtts():
                 
                 # Save to file using soundfile
                 import soundfile as sf
-                sf.write(output_path, audio, 22050)  # Assuming 22050 Hz sample rate
+                
+                # Set sample rate - use the same rate as in the clone function (22050 Hz is standard)
+                sample_rate = 22050
+                
+                # Save with the proper sample rate
+                sf.write(output_path, audio, sample_rate)
                 
                 logger.info("tts() method succeeded")
                 success = True
@@ -466,7 +601,7 @@ def text_to_speech_xtts():
                 
                 # Save to file using soundfile
                 import soundfile as sf
-                sf.write(output_path, audio, 22050)  # Assuming 22050 Hz sample rate
+                sf.write(output_path, audio, 22050)  # Using 22050 Hz sample rate
                 
                 logger.info("synthesize method succeeded")
                 success = True
@@ -540,6 +675,30 @@ def text_to_speech_xtts():
                 "error": "Failed to generate audio file",
                 "details": all_errors
             }), 500
+        
+        # Process the audio file to adjust playback speed if needed
+        if success and speed != 1.0 and os.path.exists(output_path):
+            try:
+                # Use soundfile to read and write the audio with the adjusted speed
+                import soundfile as sf
+                import numpy as np
+                import librosa
+                
+                logger.info(f"Adjusting playback speed to {speed}x")
+                
+                # Read the audio file
+                audio_data, sample_rate = sf.read(output_path)
+                
+                # Use librosa to adjust the speed
+                y_stretched = librosa.effects.time_stretch(audio_data.astype(np.float32), rate=1/speed)
+                
+                # Write the adjusted audio back to the file
+                sf.write(output_path, y_stretched, sample_rate)
+                
+                logger.info("Speed adjustment completed")
+            except Exception as e:
+                logger.warning(f"Failed to adjust playback speed: {e}")
+                # Continue with the original audio if speed adjustment fails
         
         # If we got here, the file exists and has content
         # Send file

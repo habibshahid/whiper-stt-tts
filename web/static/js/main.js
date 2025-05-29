@@ -28,6 +28,11 @@ document.addEventListener('DOMContentLoaded', function() {
     const generateStyleTTSClonedSpeechBtn = document.getElementById('generateStyleTTSClonedSpeechBtn');
 	const generateWhisperClonedSpeechBtn = document.getElementById('generateWhisperClonedSpeechBtn');
 	
+	const enableDiarization = document.getElementById('enableDiarization');
+	const diarizationStatus = document.getElementById('diarizationStatus');
+	const diarizedResultContainer = document.getElementById('diarizedResultContainer');
+	const diarizedTranscript = document.getElementById('diarizedTranscript');
+
     // MediaRecorder variables
     let mediaRecorder;
     let audioChunks = [];
@@ -86,6 +91,18 @@ document.addEventListener('DOMContentLoaded', function() {
                 
                 // Update system info
                 systemInfo.textContent = `Currently using ${data.current} model on ${data.device}`;
+				
+				if (enableDiarization) {
+					if (data.diarization_available) {
+						diarizationStatus.textContent = 'Speaker diarization is available';
+						diarizationStatus.style.display = 'block';
+						enableDiarization.disabled = false;
+					} else {
+						diarizationStatus.textContent = 'Speaker diarization is not available on this server';
+						diarizationStatus.style.display = 'block';
+						enableDiarization.disabled = true;
+					}
+				}
             })
             .catch(error => {
                 console.error('Error fetching models:', error);
@@ -206,17 +223,20 @@ document.addEventListener('DOMContentLoaded', function() {
         
         const file = audioFile.files[0];
         const language = languageSelect.value;
-        
+		const diarize = enableDiarization && enableDiarization.checked && !enableDiarization.disabled;
+        console.log('#############', diarize)
         // Create form data
         const formData = new FormData();
         formData.append('audio', file);
         if (language) {
             formData.append('language', language);
         }
+		formData.append('diarize', diarize ? 'true' : 'false');
         
         // Show loading indicator
         loadingIndicator.style.display = 'block';
         resultContainer.style.display = 'none';
+		diarizedResultContainer.style.display = 'none';
         
         // Send request
         fetch('/whisper-stt/api/transcribe', {
@@ -241,6 +261,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (data.file_url && !audioPlayer.src) {
                     audioPlayer.src = data.file_url;
                 }
+				
+				if (data.diarized_text && data.diarized_text.length > 0) {
+					// Display diarization results
+					displayDiarizedTranscript(data.diarized_text);
+					diarizedResultContainer.style.display = 'block';
+				} else {
+					diarizedResultContainer.style.display = 'none';
+				}
             } else {
                 alert('Transcription failed: ' + (data.error || 'Unknown error'));
                 loadingIndicator.style.display = 'none';
@@ -253,6 +281,53 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 	
+	function displayDiarizedTranscript(diarizedText) {
+		// Clear previous content
+		diarizedTranscript.innerHTML = '';
+		
+		// Get unique speakers to assign colors
+		const speakers = [...new Set(diarizedText.map(item => item.speaker))];
+		const speakerColors = {};
+		
+		// Assign colors to speakers
+		const colors = [
+			'#3498db', '#e74c3c', '#2ecc71', '#f39c12', '#9b59b6', 
+			'#1abc9c', '#d35400', '#34495e', '#7f8c8d', '#27ae60'
+		];
+		
+		speakers.forEach((speaker, index) => {
+			speakerColors[speaker] = colors[index % colors.length];
+		});
+		
+		// Create HTML for diarized transcript
+		let html = '<div class="diarized-transcript">';
+		
+		diarizedText.forEach(segment => {
+			const speakerColor = speakerColors[segment.speaker];
+			const timeFormatted = `[${formatTime(segment.start)} - ${formatTime(segment.end)}]`;
+			
+			html += `
+				<div class="mb-2">
+					<span class="badge rounded-pill" style="background-color: ${speakerColor}">
+						${segment.speaker}
+					</span>
+					<span class="text-muted small ms-2">${timeFormatted}</span>
+					<div class="mt-1">${segment.text}</div>
+				</div>
+			`;
+		});
+		
+		html += '</div>';
+		diarizedTranscript.innerHTML = html;
+	}
+
+	// Helper function to format time in mm:ss format
+	function formatTime(seconds) {
+		const mins = Math.floor(seconds / 60);
+		const secs = Math.floor(seconds % 60);
+		return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+	}
+
 	async function generateWhisperSpeech() {
 		const textArea = document.getElementById('textToSpeech');
 		const languageSelect = document.getElementById('ttsLanguageSelect');
@@ -417,6 +492,7 @@ document.addEventListener('DOMContentLoaded', function() {
 		const textArea = document.getElementById('textToSpeech');
 		const languageSelect = document.getElementById('ttsLanguageSelect');
 		const audioPlayer = document.getElementById('ttsAudioPlayer');
+		const speedControl = document.getElementById('ttsSpeedControl');
 		
 		if (!textArea || !languageSelect || !audioPlayer) {
 			console.error('Required elements not found');
@@ -430,6 +506,7 @@ document.addEventListener('DOMContentLoaded', function() {
 		}
 		
 		const language = languageSelect.value;
+		const speed = parseFloat(speedControl.value);
 		
 		try {
 			// Show loading state
@@ -439,7 +516,7 @@ document.addEventListener('DOMContentLoaded', function() {
 				generateXTTSSpeechBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Generating...';
 			}
 			
-			console.log('Sending XTTS request:', { text, language });
+			console.log('Sending XTTS request:', { text, language, speed });
 			
 			// Send request to the server
 			const response = await fetch('/whisper-stt/api/xtts/tts', {
@@ -450,7 +527,8 @@ document.addEventListener('DOMContentLoaded', function() {
 				},
 				body: JSON.stringify({
 					text: text,
-					language: language
+					language: language,
+					speed: speed
 				})
 			});
 			
